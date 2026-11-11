@@ -3,13 +3,24 @@ set -euo pipefail
 umask 077
 exec > >(tee -a /var/log/codex-airlift-bootstrap.log) 2>&1
 export DEBIAN_FRONTEND=noninteractive
+rm -f /var/lib/codex-airlift-ready
 apt-get update -q
 apt-get install -y -q ca-certificates curl git nodejs npm python3 python3-venv rsync ripgrep tmux build-essential unzip bubblewrap
 if ! id codex >/dev/null 2>&1; then
   useradd --create-home --shell /bin/bash codex
 fi
 install -d -o codex -g codex -m 700 /home/codex/.codex /home/codex/.local/bin /home/codex/projects
-npm install --global --ignore-scripts '@openai/codex@${codex_version}'
+# Daemon bootstrap requires the vendor-managed standalone installation; an npm
+# installation of the same version is insufficient. Pin the reviewed installer
+# and requested release; the installer also verifies the release archive digest.
+installer=$(mktemp)
+trap 'rm -f "$installer"' EXIT
+curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 https://chatgpt.com/codex/install.sh -o "$installer"
+echo "44ac252c1b9a68c02bdf0de8e1c6cbfde36fc1afa8684624962eae7d4c461e70  $installer" | sha256sum --check
+runuser -u codex -- env HOME=/home/codex CODEX_NON_INTERACTIVE=1 sh -s -- --release '${codex_version}' < "$installer"
+ln -sfn /home/codex/.local/bin/codex /usr/local/bin/codex
+ln -sfn /home/codex/.local/bin/codex-code-mode-host /usr/local/bin/codex-code-mode-host
 loginctl enable-linger codex
+runuser -u codex -- /usr/local/bin/codex --version
 # Bootstrap does not authenticate, copy chats, or change Codex permissions.
 touch /var/lib/codex-airlift-ready

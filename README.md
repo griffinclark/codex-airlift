@@ -32,6 +32,11 @@ and a Codex desktop version with SSH host handoff. Use the same pinned Codex CLI
 release on both hosts. Authenticate the Google Cloud CLI and its application
 default credentials for the intended project.
 
+The VM uses OpenAI's managed standalone installer, with its script digest and
+CLI release pinned. The npm CLI alone cannot bootstrap the durable daemon.
+If the upstream installer changes, review it and update the pinned digest;
+do not bypass its checksum or silently install `latest`.
+
 ```sh
 git clone https://github.com/griffinclark/codex-airlift.git
 cd codex-airlift
@@ -127,6 +132,18 @@ result, then transfer back. Separately test a shortened GCP deadline on an empty
 host and restore the original deadline afterward. Keep private run IDs and
 receipts outside this repository. Do not interrupt a host holding human work for
 an infrastructure test.
+
+The opt-in probes perform those two infrastructure checks and retain receipts:
+
+```sh
+# Refuses to run when the host has any non-archived chats.
+codex-airlift probe stop
+# Runs one real Codex turn, disconnects during a 90-second command, then reopens it.
+codex-airlift probe disconnect --remote-cwd /home/codex/projects/disposable-test
+```
+
+The disconnect probe incurs model usage. An existing receipt blocks blind
+resubmission; inspect its recorded thread before attempting another test.
 
 The repository's automated suite covers budget bounds, immutable lease replay,
 scope selection, uncertain submission, wrong-host rejection, and durable journal

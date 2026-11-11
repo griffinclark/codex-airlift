@@ -229,6 +229,18 @@ def manifest_command(args):
     print(json.dumps(result, indent=2))
 
 
+def probe(args):
+    from .probes import disconnect_probe, stop_probe
+    root, lease = deployment(args)
+    validate_existing(lease, lease)
+    if args.kind == "stop":
+        stop_probe(root, lease)
+    else:
+        if not args.remote_cwd:
+            raise ValueError("Provide a task-owned --remote-cwd for the disconnect probe")
+        disconnect_probe(root, lease, args.remote_cwd)
+
+
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--state-dir", default="~/.local/state/codex-airlift")
@@ -264,6 +276,10 @@ def parser():
     d.add_argument("--thread")
     d.add_argument("--operation")
     d.set_defaults(func=manifest_command)
+    d = commands.add_parser("probe", help="Run an opt-in live verification; never use shutdown on a host with user chats")
+    d.add_argument("kind", choices=["stop", "disconnect"])
+    d.add_argument("--remote-cwd")
+    d.set_defaults(func=probe)
     return p
 
 
@@ -272,7 +288,7 @@ def main():
     try:
         args = parser().parse_args()
         args.func(args)
-    except (ValueError, OSError, KeyError, subprocess.SubprocessError) as error:
+    except (ValueError, OSError, EOFError, KeyError, subprocess.SubprocessError) as error:
         print(f"airlift: {error}", file=sys.stderr)
         raise SystemExit(1)
 
