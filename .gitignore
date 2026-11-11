@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+.terraform/
+*.tfstate*
+*.tfvars
+*.tfvars.json
+*.tfplan
+.private/
+*.pem
+auth.json
+inventory*.json
+manifest*.json
+deployment.json

@@ -1,0 +1,15 @@
+#!/bin/bash
+set -euo pipefail
+umask 077
+exec > >(tee -a /var/log/codex-airlift-bootstrap.log) 2>&1
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -q
+apt-get install -y -q ca-certificates curl git nodejs npm python3 python3-venv rsync ripgrep tmux build-essential unzip bubblewrap
+if ! id codex >/dev/null 2>&1; then
+  useradd --create-home --shell /bin/bash codex
+fi
+install -d -o codex -g codex -m 700 /home/codex/.codex /home/codex/.local/bin /home/codex/projects
+npm install --global --ignore-scripts '@openai/codex@${codex_version}'
+loginctl enable-linger codex
+# Bootstrap does not authenticate, copy chats, or change Codex permissions.
+touch /var/lib/codex-airlift-ready
