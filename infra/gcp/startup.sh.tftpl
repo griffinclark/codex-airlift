@@ -5,7 +5,9 @@ exec > >(tee -a /var/log/codex-airlift-bootstrap.log) 2>&1
 export DEBIAN_FRONTEND=noninteractive
 rm -f /var/lib/codex-airlift-ready
 apt-get update -q
-apt-get install -y -q ca-certificates curl git nodejs npm python3 python3-venv rsync ripgrep tmux build-essential unzip bubblewrap
+apt-get install -y -q ca-certificates curl git nodejs npm python3 python3-venv rsync ripgrep tmux build-essential unzip bubblewrap apparmor-profiles apparmor-utils
+install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
+apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
 if ! id codex >/dev/null 2>&1; then
   useradd --create-home --shell /bin/bash codex
 fi
@@ -22,5 +24,28 @@ ln -sfn /home/codex/.local/bin/codex /usr/local/bin/codex
 ln -sfn /home/codex/.local/bin/codex-code-mode-host /usr/local/bin/codex-code-mode-host
 loginctl enable-linger codex
 runuser -u codex -- /usr/local/bin/codex --version
+# Keep the managed daemon alive across both SSH disconnects and VM restarts.
+cat > /etc/systemd/system/codex-airlift-daemon.service <<'UNIT'
+[Unit]
+Description=Codex Airlift managed app-server
+Wants=network-online.target
+After=network-online.target google-startup-scripts.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=codex
+Environment=HOME=/home/codex
+ExecStart=/usr/local/bin/codex app-server daemon start
+ExecStop=/usr/local/bin/codex app-server daemon stop
+TimeoutStartSec=120
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable codex-airlift-daemon.service
+systemctl start --no-block codex-airlift-daemon.service
 # Bootstrap does not authenticate, copy chats, or change Codex permissions.
 touch /var/lib/codex-airlift-ready

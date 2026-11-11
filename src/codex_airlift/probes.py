@@ -12,13 +12,16 @@ from .storage import write_json
 
 
 def remote_rpc(root, lease):
-    return RpcClient(["ssh", "-F", str(root / "ssh_config"), lease["name"], "codex app-server proxy"])
+    return RpcClient(["ssh", "-F", str(root / "ssh_config"), lease["name"], "codex app-server proxy"], websocket=True)
 
 
 def gcloud(lease, operation, *arguments, check=True):
-    return subprocess.run(["gcloud", "compute", "instances", operation, lease["name"],
+    result = subprocess.run(["gcloud", "compute", "instances", operation, lease["name"],
                            "--project=" + lease["project"], "--zone=" + lease["zone"],
-                           "--quiet", *arguments], check=check, capture_output=True, text=True, timeout=120)
+                           "--quiet", *arguments], capture_output=True, text=True, timeout=300)
+    if check and result.returncode:
+        raise ValueError(f"GCP {operation} failed: {result.stderr[-3000:]}")
+    return result
 
 
 def stop_probe(root, lease):
@@ -29,12 +32,18 @@ def stop_probe(root, lease):
         if existing.get("data"):
             raise ValueError("Shutdown test requires a host with no non-archived chats")
     receipt = {"started_at": timestamp(utcnow()), "original_deadline": lease["termination_time"],
-               "test_deadline": timestamp(utcnow() + timedelta(seconds=75)), "checks": []}
+               "checks": []}
     path = root / "stop-probe.json"
     write_json(path, receipt)
-    gcloud(lease, "set-scheduling", "--termination-time=" + receipt["test_deadline"],
-           "--instance-termination-action=STOP")
     try:
+        # GCP requires TERMINATED before a schedule update. Calculate the short
+        # deadline after this preparation, so shutdown latency cannot consume it.
+        gcloud(lease, "stop")
+        receipt["test_deadline"] = timestamp(utcnow() + timedelta(seconds=120))
+        write_json(path, receipt)
+        gcloud(lease, "set-scheduling", "--termination-time=" + receipt["test_deadline"],
+               "--instance-termination-action=STOP")
+        gcloud(lease, "start")
         deadline = time.monotonic() + 300
         while time.monotonic() < deadline:
             result = gcloud(lease, "describe", "--format=value(status)")
@@ -55,6 +64,9 @@ def stop_probe(root, lease):
         receipt["restart_rejection"] = attempted.stderr
         receipt["checks"].append("GCP rejected restart after the expired deadline")
     finally:
+        current = gcloud(lease, "describe", "--format=value(status)").stdout.strip()
+        if current != "TERMINATED":
+            gcloud(lease, "stop")
         gcloud(lease, "set-scheduling", "--termination-time=" + lease["termination_time"],
                "--instance-termination-action=STOP")
         receipt["restored_deadline"] = lease["termination_time"]
@@ -76,7 +88,7 @@ def disconnect_probe(root, lease, cwd):
     try:
         client.initialize()
         started = client.request("thread/start", {"cwd": cwd, "sandbox": "workspace-write",
-                                                  "approvalPolicy": "on-request"})
+                                                  "approvalPolicy": "on-request", "historyMode": "paginated"})
         thread_id = started["thread"]["id"]
         receipt = {"thread_id": thread_id, "cwd": cwd, "marker": marker, "started_at": timestamp(utcnow())}
         write_json(root / "disconnect-probe.json", receipt)
@@ -105,14 +117,27 @@ def disconnect_probe(root, lease, cwd):
     # command runs in a yielded terminal; no model polling or extra agent is used.
     time.sleep(110)
     with remote_rpc(root, lease) as reopened:
-        saved = reopened.request("thread/read", {"threadId": thread_id, "includeTurns": True})
+        saved = reopened.request("thread/read", {"threadId": thread_id})
         receipt["reopened_at"] = timestamp(utcnow())
         receipt["thread_readback"] = saved
         write_json(root / "disconnect-probe.json", receipt)
+        until = time.monotonic() + 120
+        while True:
+            turns = reopened.request("thread/turns/list", {"threadId": thread_id, "limit": 10, "itemsView": "full"})
+            receipt["turns_readback"] = turns
+            write_json(root / "disconnect-probe.json", receipt)
+            target = next((t for t in turns.get("data", []) if t["id"] == receipt["turn_id"]), None)
+            if target and target.get("status") == "completed":
+                break
+            if target and target.get("status") in ("failed", "interrupted"):
+                raise ValueError("Detached turn did not complete; inspect the retained thread receipt")
+            if time.monotonic() >= until:
+                raise ValueError("Detached turn remains unresolved; preserve and inspect the same thread")
+            time.sleep(10)
     body = subprocess.run(["ssh", "-F", str(root / "ssh_config"), lease["name"],
                            "cat -- " + shlex.quote(cwd + "/" + marker)], check=True, capture_output=True, text=True, timeout=60).stdout
     if body != "airlift-complete":
         raise ValueError("Detached execution did not produce the expected saved result")
     receipt["saved_result"] = body
     write_json(root / "disconnect-probe.json", receipt)
-    print(json.dumps({k: v for k, v in receipt.items() if k != "thread_readback"}, indent=2))
+    print(json.dumps({k: v for k, v in receipt.items() if k not in ("thread_readback", "turns_readback")}, indent=2))

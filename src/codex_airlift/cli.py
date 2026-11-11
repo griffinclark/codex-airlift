@@ -109,14 +109,31 @@ def configure_ssh(args):
     include = f'Include "{root / "ssh_config"}"'
     with locked(config):
         old = config.read_text() if config.exists() else ""
-        if include not in old.splitlines():
-            if re.search(r"(?im)^Host\s+.*\b" + re.escape(lease["name"]) + r"\b", old):
-                raise ValueError("SSH alias already exists; preserving it")
-            fd, temporary = tempfile.mkstemp(prefix=".airlift-", dir=ssh_dir)
-            with os.fdopen(fd, "w") as stream:
-                stream.write(include + "\n" + old)
-            os.replace(temporary, config)
+        updated = merge_ssh_config(old, include, (root / "ssh_config").read_text(), lease["name"])
+        fd, temporary = tempfile.mkstemp(prefix=".airlift-", dir=ssh_dir)
+        with os.fdopen(fd, "w") as stream:
+            stream.write(updated)
+        os.replace(temporary, config)
     print(f"SSH alias configured: {lease['name']}")
+
+
+def merge_ssh_config(old, include, block, name):
+    begin, end = f"# BEGIN codex-airlift {name}", f"# END codex-airlift {name}"
+    # Keep a concrete Host in the root config for clients that discover aliases
+    # there instead of recursively parsing Include directives.
+    old = "".join(line for line in old.splitlines(keepends=True) if line.rstrip("\r\n") != include)
+    if begin in old:
+        start = old.index(begin)
+        finish = old.find(end, start)
+        if finish < 0:
+            raise ValueError("Incomplete owned SSH block; preserving the file")
+        finish += len(end)
+        if old[finish:finish + 1] == "\n":
+            finish += 1
+        old = old[:start] + old[finish:]
+    if re.search(r"(?im)^Host\s+.*\b" + re.escape(name) + r"\b", old):
+        raise ValueError("SSH alias already exists outside the owned block; preserving it")
+    return begin + "\n" + block + end + "\n" + old
 
 
 def authorize(args):
@@ -141,7 +158,9 @@ print('Credential installed privately; existing credentials were not overwritten
 
 
 def bootstrap_daemon(args):
-    ssh(args, "codex app-server daemon bootstrap", timeout=120)
+    # `daemon bootstrap` also starts a latest-channel updater. Airlift starts the
+    # pinned daemon only; systemd owns restart/boot lifecycle on this host.
+    ssh(args, "sudo -n systemctl start codex-airlift-daemon.service && codex app-server daemon start", timeout=120)
 
 
 def doctor(args):
@@ -156,13 +175,19 @@ def doctor(args):
     if not actual or parse_time(actual) != parse_time(lease["termination_time"]):
         raise ValueError("Live GCP shutdown deadline differs from the budget lease")
     print(json.dumps({"live_host": host, "monthly_compute_ceiling_usd": lease["maximum_monthly_compute_usd"]}, indent=2), flush=True)
-    ssh(args, "bash -s", input="""set -euo pipefail
+    checked = ssh(args, "bash -s", input="""set -euo pipefail
 test -f /var/lib/codex-airlift-ready
 codex --version
 codex login status
 codex app-server daemon version
 test -d ~/projects
-""", text=True, timeout=90)
+""", text=True, capture_output=True, timeout=90)
+    print(checked.stdout, end="")
+    print(checked.stderr, end="", file=sys.stderr)
+    lines = checked.stdout.strip().splitlines()
+    server = json.loads(lines[-1])
+    if "codex-cli " + lease["codex_version"] not in lines or server.get("appServerVersion") != lease["codex_version"]:
+        raise ValueError("CLI/server version differs from the pinned deployment; reconcile before transferring chats")
 
 
 def prepare_repo(args):

@@ -33,9 +33,12 @@ release on both hosts. Authenticate the Google Cloud CLI and its application
 default credentials for the intended project.
 
 The VM uses OpenAI's managed standalone installer, with its script digest and
-CLI release pinned. The npm CLI alone cannot bootstrap the durable daemon.
+CLI release pinned. The npm CLI alone cannot start the managed daemon.
 If the upstream installer changes, review it and update the pinned digest;
 do not bypass its checksum or silently install `latest`.
+Systemd starts `codex app-server daemon start`; Airlift avoids `daemon bootstrap`,
+which also enables a latest-channel updater. The app-server control socket stays
+private, and its WebSocket protocol is carried through SSH by the vendor proxy.
 
 ```sh
 git clone https://github.com/griffinclark/codex-airlift.git
@@ -74,7 +77,8 @@ remain on the protected 100 GB disk when compute stops.
 
 State defaults to `~/.local/state/codex-airlift` with owner-only permissions.
 For independent deployments, pass a different `--state-dir` to **every** command.
-The SSH config include is added without replacing existing configuration.
+A marked, concrete Host block is added to SSH config without replacing unrelated
+configuration, so the desktop app can discover the alias directly.
 
 In the desktop app, enable the named SSH host under Settings > Connections,
 save a matching remote project, then invoke `$codex-to-cloud`. Return with
