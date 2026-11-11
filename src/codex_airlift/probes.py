@@ -8,7 +8,7 @@ import time
 
 from .budget import timestamp, utcnow
 from .rpc import RpcClient
-from .storage import write_json
+from .storage import read_json, write_json
 
 
 def remote_rpc(root, lease):
@@ -78,7 +78,12 @@ def stop_probe(root, lease):
     print(json.dumps(receipt, indent=2))
 
 
-def disconnect_probe(root, lease, cwd):
+def disconnect_probe(root, lease, cwd, reconcile=False):
+    if reconcile:
+        receipt = read_json(root / "disconnect-probe.json")
+        if not all(receipt.get(key) for key in ("thread_id", "turn_id", "disconnected_at", "cwd", "marker")):
+            raise ValueError("Recorded disconnect is incomplete; inspect it without resubmitting")
+        return reconcile_disconnect(root, lease, receipt)
     if (root / "disconnect-probe.json").exists():
         raise ValueError("A disconnect probe receipt exists; inspect that thread before another live test")
     if not cwd.startswith("/home/codex/projects/") or ".." in cwd.split("/"):
@@ -94,7 +99,9 @@ def disconnect_probe(root, lease, cwd):
         write_json(root / "disconnect-probe.json", receipt)
         command = f"python3 -c \"import time; time.sleep(90); open('{marker}', 'w').write('airlift-complete')\""
         prompt = ("This is a disposable execution persistence check. Run exactly this one terminal command, "
-                  "with no backgrounding, then read its file and report the contents. Do not perform any other work: " + command)
+                  "with no backgrounding. Wait for the process to exit, using the terminal session's wait tool "
+                  "as needed, then read its file and report the contents. Do not report before the process "
+                  "has exited and the file exists. Do not perform any other work: " + command)
         turn = client.request("turn/start", {"threadId": thread_id,
                                              "input": [{"type": "text", "text": prompt}]})
         receipt["turn_id"] = turn["turn"]["id"]
@@ -116,6 +123,12 @@ def disconnect_probe(root, lease, cwd):
     # Deterministic I/O only. The invoking coding chat can do other work while this
     # command runs in a yielded terminal; no model polling or extra agent is used.
     time.sleep(110)
+    return reconcile_disconnect(root, lease, receipt)
+
+
+def reconcile_disconnect(root, lease, receipt):
+    """Read the same recorded turn and file; never submit another model turn."""
+    thread_id, cwd, marker = receipt["thread_id"], receipt["cwd"], receipt["marker"]
     with remote_rpc(root, lease) as reopened:
         saved = reopened.request("thread/read", {"threadId": thread_id})
         receipt["reopened_at"] = timestamp(utcnow())

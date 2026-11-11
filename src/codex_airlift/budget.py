@@ -48,10 +48,12 @@ def make_lease(project, name, budget, codex_version, now=None):
     }
 
 
-def validate_existing(existing, requested, now=None):
-    for field in ("project", "name", "compute_budget_usd", "codex_version"):
+def validate_existing(existing, requested, now=None, update_codex=False):
+    for field in ("project", "name", "compute_budget_usd"):
         if existing[field] != requested[field]:
             raise ValueError(f"Existing deployment differs in {field}; refusing an implicit reset/update")
     if parse_time(existing["termination_time"]) <= (now or utcnow()):
         raise ValueError("Compute lease expired; explicit renewed budget authorization is required")
-    return existing
+    if existing["codex_version"] != requested["codex_version"] and not update_codex:
+        raise ValueError("Codex version differs; explicitly pass --update-codex to preserve the lease while updating")
+    return dict(existing, codex_version=requested["codex_version"])

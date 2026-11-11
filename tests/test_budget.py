@@ -37,3 +37,12 @@ class BudgetTest(unittest.TestCase):
             make_lease("example-project", "bad;touch x", "100", "0.146.0", self.now)
         with self.assertRaises(ValueError):
             make_lease("example-project", "airlift", "100", "latest;command", self.now)
+
+    def test_explicit_version_update_preserves_budget_anchor(self):
+        changed = dict(self.lease, codex_version="0.167.1")
+        with self.assertRaises(ValueError):
+            validate_existing(self.lease, changed, self.now)
+        updated = validate_existing(self.lease, changed, self.now, update_codex=True)
+        self.assertEqual(updated, changed)
+        self.assertEqual(updated["budget_started_at"], self.lease["budget_started_at"])
+        self.assertEqual(updated["termination_time"], self.lease["termination_time"])

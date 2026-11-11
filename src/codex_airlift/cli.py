@@ -66,7 +66,7 @@ def deploy(args):
     requested = make_lease(args.project, args.name, args.monthly_budget, args.codex_version)
     with locked(root / "deployment.json"):
         path = root / "deployment.json"
-        lease = validate_existing(read_json(path), requested) if path.exists() else requested
+        lease = validate_existing(read_json(path), requested, update_codex=args.update_codex) if path.exists() else requested
         write_json(path, lease)
         key = root / "id_ed25519"
         if not key.exists():
@@ -261,9 +261,9 @@ def probe(args):
     if args.kind == "stop":
         stop_probe(root, lease)
     else:
-        if not args.remote_cwd:
+        if not args.remote_cwd and not args.reconcile:
             raise ValueError("Provide a task-owned --remote-cwd for the disconnect probe")
-        disconnect_probe(root, lease, args.remote_cwd)
+        disconnect_probe(root, lease, args.remote_cwd, reconcile=args.reconcile)
 
 
 def parser():
@@ -276,6 +276,7 @@ def parser():
     d.add_argument("--name", default="codex-airlift")
     d.add_argument("--monthly-budget", default="100")
     d.add_argument("--codex-version", required=True)
+    d.add_argument("--update-codex", action="store_true", help="Explicitly update the pinned version without extending the compute lease")
     d.add_argument("--apply", action="store_true")
     d.set_defaults(func=deploy)
     for name, function in (("configure-ssh", configure_ssh), ("doctor", doctor), ("bootstrap-daemon", bootstrap_daemon)):
@@ -304,6 +305,7 @@ def parser():
     d = commands.add_parser("probe", help="Run an opt-in live verification; never use shutdown on a host with user chats")
     d.add_argument("kind", choices=["stop", "disconnect"])
     d.add_argument("--remote-cwd")
+    d.add_argument("--reconcile", action="store_true", help="Read the recorded disconnect result without starting another turn")
     d.set_defaults(func=probe)
     return p
 

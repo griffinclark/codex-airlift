@@ -28,9 +28,10 @@ Linux VM support macOS desktop apps.
 ## Install
 
 Requires macOS/Linux, Python 3.10+, Git, Terraform 1.5+, Google Cloud CLI, SSH,
-and a Codex desktop version with SSH host handoff. Use the same pinned Codex CLI
-release on both hosts. Authenticate the Google Cloud CLI and its application
-default credentials for the intended project.
+and a Codex desktop version with SSH host handoff. Pin a Codex CLI release
+compatible with the desktop app's bundled Codex version. Check that
+version rather than assuming a separately installed CLI is current. Authenticate
+the Google Cloud CLI and its application default credentials for the intended project.
 
 The VM uses OpenAI's managed standalone installer, with its script digest and
 CLI release pinned. The npm CLI alone cannot start the managed daemon.
@@ -55,9 +56,9 @@ For a noneditable install, pass `--source-dir /path/to/codex-airlift`.
 ## Deploy a standalone host
 
 ```sh
-codex-airlift deploy --project example-project --monthly-budget 100 --codex-version 0.146.0
+codex-airlift deploy --project example-project --monthly-budget 100 --codex-version 0.167.1
 # Review the plan, then apply the same private deployment:
-codex-airlift deploy --project example-project --monthly-budget 100 --codex-version 0.146.0 --apply
+codex-airlift deploy --project example-project --monthly-budget 100 --codex-version 0.167.1 --apply
 codex-airlift configure-ssh
 ssh codex-airlift 'test -f /var/lib/codex-airlift-ready'
 codex-airlift authorize --auth-file ~/.codex/auth.json
@@ -69,6 +70,11 @@ Startup package installation can take several minutes. Authorize only a trusted
 host with your own credential. Credential contents are streamed over SSH, never
 put in Terraform, command arguments, logs, or the repo; existing remote credentials
 are preserved. You can instead sign in on the host using normal Codex login.
+
+For a deliberate Codex upgrade, pass `--update-codex` with the new pinned version.
+This changes startup metadata in place and preserves the original compute lease.
+Apply while remote work is idle, then reboot the host to run the updated startup
+script. Verify `doctor` before handing off chats.
 
 Terraform uses its own state, network, SSH key, and service account. Only the IAP
 SSH source range can reach port 22. App-server has no public listener. The VM's
@@ -148,6 +154,8 @@ codex-airlift probe disconnect --remote-cwd /home/codex/projects/disposable-test
 
 The disconnect probe incurs model usage. An existing receipt blocks blind
 resubmission; inspect its recorded thread before attempting another test.
+Use `codex-airlift probe disconnect --reconcile` to reopen the recorded turn and
+saved file after a transport failure or server repair, without starting a turn.
 
 The repository's automated suite covers budget bounds, immutable lease replay,
 scope selection, uncertain submission, wrong-host rejection, and durable journal

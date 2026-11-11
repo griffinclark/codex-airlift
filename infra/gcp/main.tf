@@ -143,10 +143,10 @@ resource "google_compute_instance" "host" {
     "enable-oslogin"         = "FALSE"
     "ssh-keys"               = "codex:${trimspace(var.ssh_public_key)}"
     "airlift-termination"    = terraform_data.lease.output.termination_time
+    "startup-script" = templatefile("${path.module}/startup.sh.tftpl", {
+      codex_version = var.codex_version
+    })
   }
-  metadata_startup_script = templatefile("${path.module}/startup.sh.tftpl", {
-    codex_version = var.codex_version
-  })
   scheduling {
     provisioning_model          = "STANDARD"
     automatic_restart           = false
