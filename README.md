@@ -102,6 +102,20 @@ This sends committed Git objects through IAP/SSH and preserves existing working
 files. Native handoff subsequently transfers the selected chat's Git work. It
 doesn't push private source to this public repository.
 
+For an existing deployment, prepare a project with one script:
+
+```sh
+./scripts/setup-project.sh /path/to/project
+# Optional second argument selects an independent private deployment state directory.
+```
+
+The script configures the SSH alias, checks the existing host and authentication,
+prepares committed Git objects, and installs both skills. It does not provision
+more compute, renew the lease, register a desktop project, or migrate chats.
+Finish by choosing the printed remote folder with the folder-plus button in
+Settings > Connections > SSH. The documented desktop interface owns that saved
+project selection; the CLI has no project-registration operation.
+
 ## Monthly compute limit
 
 The deployment fixes **one `e2-highmem-2` (2 vCPU, 16 GiB) in `us-central1-a`**.
