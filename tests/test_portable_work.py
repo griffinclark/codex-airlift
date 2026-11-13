@@ -15,7 +15,7 @@ from codex_airlift.git_snapshot import snapshot, restore, state
 from codex_airlift.packet import pack, unpack, verify_contents
 from codex_airlift.runtime import RuntimeStore, terminal_arguments
 from codex_airlift.storage import private_dir, write_json
-from codex_airlift.transfer import receive, settings_from_row, resume_parameters, verify_settings
+from codex_airlift.transfer import receive, settings_from_row, resume_parameters, verify_settings, export_runtime
 from codex_airlift.desktop_stage import verify_archived_workspace
 from codex_airlift.client import cli_command
 
@@ -178,3 +178,14 @@ class PortableWorkTest(unittest.TestCase):
              contextlib.redirect_stdout(io.StringIO()):
             cli_command(args)
         self.assertEqual([call.args[1] for call in moved.call_args_list], ids)
+
+    def test_a_stale_catalog_cannot_unarchive_a_human_stop(self):
+        store = RuntimeStore(self.root / "owned", "/bin/false", self.root / "auth")
+        tid = "22222222-2222-4222-8222-222222222222"
+        runtime_id = "11111111-1111-4111-8111-111111111111"
+        store.record(tid, {"state": "ready", "runtime_id": runtime_id})
+        with patch("codex_airlift.transfer.desktop_row", return_value={"archived": 1}), \
+             patch.object(store, "rpc", side_effect=AssertionError("Must not resume an archived source")):
+            with self.assertRaisesRegex(ValueError, "human stop"):
+                export_runtime(store, "33333333-3333-4333-8333-333333333333", tid)
+        self.assertEqual(store.catalog()["threads"][tid]["state"], "archived")

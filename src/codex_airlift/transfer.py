@@ -152,6 +152,9 @@ def export_runtime(store, op_id, thread_id):
         if not record or (record.get("state") != "ready" and not (
                 record.get("state") == "suspended" and record.get("outgoing_operation") == op_id)):
             raise ValueError("This host does not own the selected chat or outgoing operation")
+        if record["state"] == "ready" and desktop_row(store.info(record["runtime_id"])["home"], thread_id)["archived"]:
+            store.record(thread_id, dict(record, state="archived"))
+            raise ValueError("The source was archived outside Airlift; preserving that human stop")
         already_archived = False
         if record["state"] == "suspended":
             already_archived = bool(desktop_row(store.info(record["runtime_id"])["home"], thread_id)["archived"])
