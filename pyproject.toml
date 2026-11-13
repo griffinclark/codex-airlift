@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codex-airlift"
-version = "0.1.0"
-description = "Budget-bounded GCP hosts and recoverable native Codex chat handoffs"
+version = "0.2.0"
+description = "Budget-bounded GCP hosts and recoverable Codex chat and Git transfers"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}

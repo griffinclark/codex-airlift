@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Register a repository automatically, and require native desktop readback.
+# Install the independent client; no desktop Settings or project clicks.
 set -euo pipefail
 
 source_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -10,4 +10,4 @@ fi
 if ! "$python" -c 'import codex_airlift' >/dev/null 2>&1; then
   "$python" -m pip install -e "$source_dir"
 fi
-exec "$python" -m codex_airlift.cli --source-dir "$source_dir" setup-project "$@"
+exec "$python" -m codex_airlift.cli --source-dir "$source_dir" setup "$@"

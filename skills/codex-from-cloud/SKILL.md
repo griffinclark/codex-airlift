@@ -1,43 +1,29 @@
 ---
 name: codex-from-cloud
-description: Return Codex chats and their Git work from a configured Codex Airlift SSH host to this computer. Use when bringing cloud-hosted coding work back after travel.
+description: Return Codex Airlift chats and their Git work from the cloud to this computer after travel, preserving history and saved results.
 ---
 
-# Bring Codex work back to this computer
+Use the configured `codex-airlift` checkout and its private deployment state.
+Run `chats` to inspect cloud ownership, freeze the intended IDs in a private JSON
+list, and run `batch --to local --inventory FILE --batch UUID`. Omit the inventory
+only when the user explicitly requested all currently Airlift-owned cloud chats.
+Reuse the original UUID to reconcile a failed connection; do not issue a new
+operation or replay a model turn to resolve uncertainty.
 
-Run this from a local orchestration chat using the installed `codex-airlift` CLI
-and Codex desktop app tools. Read the private deployment configuration and the
-outbound transfer journal first. Cloud means the configured SSH host, not Codex
-Cloud. Do not overwrite local Git work or copy a live Codex database.
+The worker suspends source ownership before archiving execution. It transfers
+canonical history and a Git snapshot over IAP SSH, restores a fresh local
+runtime and isolated checkout, and compares chat ID, turn history and Git/file
+hashes. Original cloud data and source checkouts remain retained. A failed or
+uncertain operation stays incomplete; inspect its recorded receipt and both
+hosts before changing ownership. Never bypass the duplicate-executor guard.
 
-1. Read current projects and chats from both hosts. Reconcile every unfinished
-   outbound operation through its recorded operationId before planning returns.
-   Default to the successfully moved outbound set still on that host; when the
-   user requests every open cloud chat, include the current loaded cloud set too.
-   Preserve human pauses, stopped turns, models, and permission settings.
-2. Confirm this computer has matching saved projects, repository subdirectories,
-   required credentials/tools, and the original worktrees. Inspect dirty local
-   changes and divergent commits. Let native handoff reconcile Git state; stop
-   on a conflict instead of stashing, resetting, or merging unrelated work.
-3. Save the complete requested cloud inventory privately. Create a new return
-   journal with `codex-airlift manifest plan --file /private/return.json --inventory /private/cloud.json --source HOST_ID --destination local --caller THIS_CHAT_ID`.
-   For a precise outbound subset, filter the inventory to its verified IDs first.
-   Keep both journals. Never replace the outbound evidence.
-4. Move sequentially with `manifest claim`, `handoff_thread(destinationHostId="local")`,
-   `manifest submit` using the returned operationId, and bounded
-   `get_handoff_status(afterRevision=…, waitMs=30000..60000)` calls. If a submit is
-   uncertain, inspect that operation and both hosts before a retry. A claimed or
-   submitted row must be reconciled, never blindly resubmitted.
-5. Read each returned chat and its Git work on this computer. Save a fresh local
-   inventory and use `manifest verify --file … --thread ID --inventory …` only
-   after the saved history and files reopen correctly. Mark confirmed failures
-   with `manifest fail` and diagnose before continuing.
-6. Report exact verified/failed/pending/excluded counts. Keep the VM and disk
-   available if anything remains there. Once all requested work is verified local,
-   stop the named VM when requested or already authorized; retain its persistent
-   disk and journals. Never destroy private work as transfer cleanup.
+Preserve human pauses, queued decisions and external-action receipts. Do not
+automatically approve requests or rerun interrupted commands. The source and
+destination retain their histories; a new user instruction resumes work.
 
-The calling chat cannot move itself through the app tool. Checkpoint and use its
-native footer last if it also needs to return. Do not relax the monthly budget,
-renew the lease, or replay research/deployment side effects merely to bring a
-conversation home.
+Verify `state=verified` for every selected ID, reopen a returned chat with
+`chat local ID`, and check its saved artifacts. Use `open` for the terminal chat
+picker. Returned chats live in Airlift's independent interface and isolated
+working folders; this does not promise registration in official Codex Desktop.
+Do not overwrite the user's original checkout or delete retained cloud data.
+The VM's existing compute lease is unchanged by returning or reconnecting.

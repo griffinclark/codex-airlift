@@ -1,1 +1,1 @@
-"""Codex Airlift: infrastructure and receipt-backed handoff planning."""
+"""Codex Airlift: budget-bounded hosts and recoverable chat transfers."""

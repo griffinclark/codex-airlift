@@ -10,9 +10,9 @@ import time
 
 
 class RpcClient:
-    def __init__(self, command, websocket=False):
+    def __init__(self, command, websocket=False, env=None):
         self.process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                        stderr=subprocess.DEVNULL, bufsize=0)
+                                        stderr=subprocess.DEVNULL, bufsize=0, env=env)
         self.selector = selectors.DefaultSelector()
         self.selector.register(self.process.stdout, selectors.EVENT_READ)
         self.buffer = b""
@@ -151,7 +151,7 @@ class RpcClient:
             self.events.append(message)
 
     def initialize(self):
-        result = self.request("initialize", {"clientInfo": {"name": "codex_airlift", "version": "0.1.0"},
+        result = self.request("initialize", {"clientInfo": {"name": "codex_airlift", "version": "0.2.0"},
                                              "capabilities": {"experimentalApi": True}})
         self.send({"method": "initialized", "params": {}})
         return result

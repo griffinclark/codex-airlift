@@ -1,220 +1,171 @@
 # Codex Airlift
 
-Move open Codex coding chats to your own GCP SSH host before travel, then bring
-them home. Airlift provisions a persistent host with Terraform and supplies two
-Codex skills that coordinate **native Codex host handoff** with a recoverable
-private journal. It does not replace Codex or copy its live session database.
+Move Codex coding chats and their Git work to your own GCP VM before travel,
+then bring them back. Airlift provides Terraform, an unattended setup script,
+two Codex skills, and an independent terminal chat picker. It uses the official
+Codex terminal UI and public app-server protocol over IAP SSH.
 
-This is an independent project, not an OpenAI or Google product.
+This is an independent project, not an OpenAI or Google product. Migrated chats
+open in **Airlift's terminal interface**. Official Codex Desktop registration is
+not required. The optional native Desktop adapter remains experimental.
 
-**Integration status:** GCP provisioning and public app-server project
-registration are implemented. Unattended desktop recognition and a native chat
-round trip have not passed live acceptance. Setup returns a nonzero status until
-the desktop recognizes the registered project; this release is not a verified
-end-to-end migration product.
+## Setup
 
-## What runs where
-
-- GCP runs a single Ubuntu VM, Codex, your repositories, and their tools.
-- Codex's managed app-server daemon owns execution independently of a terminal.
-- The desktop app's supported host-handoff tool moves conversation and Git state.
-- `codex-to-cloud` and `codex-from-cloud` select chats, transfer sequentially,
-  reconcile operation IDs, and verify destination readback.
-- The CLI prepares infrastructure, repositories, and private transfer manifests.
-  It does **not** offer an undocumented desktop RPC endpoint or a standalone
-  command that pretends to migrate chats by copying JSONL files.
-
-Read [OpenAI's SSH and handoff instructions](https://learn.chatgpt.com/docs/remote-connections).
-An active turn is interrupted during native handoff. A chat cannot use the app
-tool to hand itself off; move the orchestration chat with its native footer last.
-Host tool availability, authentication, trusted hooks, browser sessions, and
-local paths must be prepared separately. A successful transfer does not make a
-Linux VM support macOS desktop apps.
-
-## Install
-
-Requires macOS/Linux, Python 3.10+, Git, Terraform 1.5+, Google Cloud CLI, SSH,
-and a Codex desktop version with SSH host handoff. Pin a Codex CLI release
-compatible with the desktop app's bundled Codex version. Check that
-version rather than assuming a separately installed CLI is current. Authenticate
-the Google Cloud CLI and its application default credentials for the intended project.
-
-The VM uses OpenAI's managed standalone installer, with its script digest and
-CLI release pinned. The npm CLI alone cannot start the managed daemon.
-If the upstream installer changes, review it and update the pinned digest;
-do not bypass its checksum or silently install `latest`.
-Systemd starts `codex app-server daemon start`; Airlift avoids `daemon bootstrap`,
-which also enables a latest-channel updater. The app-server control socket stays
-private, and its WebSocket protocol is carried through SSH by the vendor proxy.
+Requires macOS/Linux, Python 3.10+, Git, SSH, Google Cloud CLI and Terraform 1.5+.
+Authenticate GCP and application default credentials for your intended project,
+and sign in to Codex locally. Review the Terraform allocation before applying.
 
 ```sh
 git clone https://github.com/griffinclark/codex-airlift.git
 cd codex-airlift
-python3 -m venv .venv
-.venv/bin/pip install -e .
-.venv/bin/codex-airlift install-skills
+./scripts/setup-project.sh --project example-project --apply
 ```
 
-Put `.venv/bin` on PATH or use the absolute executable path in a Codex chat.
-Source must remain available because the Terraform and skills ship in the repo.
-For a noneditable install, pass `--source-dir /path/to/codex-airlift`.
+For an existing Airlift deployment, run `./scripts/setup-project.sh` again.
+It configures SSH, waits for bootstrap, installs your selected Codex credential
+privately if needed, checks the original compute lease, installs both skills,
+and installs the pinned local client and cloud worker. It requires no Desktop
+Settings or project clicks. Existing credentials are preserved. The installer
+and CLI release are pinned; Airlift does not silently update to `latest`.
+Setup also writes an executable `Airlift.command` launcher in the private state
+folder; double-click it on macOS to open the terminal chat picker.
 
-## Deploy a standalone host
+The default deployment state is `~/.local/state/codex-airlift`, mode 700.
+Use `--state-dir /private/path` consistently for a separate deployment. The
+public repository receives no credentials, inventories, source repositories,
+chat history, Terraform state, SSH keys or deployment-specific identifiers.
+
+## Move chats and open the interface
+
+Ask Codex to use `$codex-to-cloud` to move your open chats. The skill selects
+coding chats through public chat tools, archives the sources to stop their
+execution, and invokes a recoverable batch. Active work is interrupted; human
+pauses and uncertain external actions are never automatically replayed.
+Archived history and original checkouts remain retained.
 
 ```sh
-codex-airlift deploy --project example-project --monthly-budget 100 --codex-version 0.167.1
-# Review the plan, then apply the same private deployment:
-codex-airlift deploy --project example-project --monthly-budget 100 --codex-version 0.167.1 --apply
-codex-airlift configure-ssh
-ssh codex-airlift 'test -f /var/lib/codex-airlift-ready'
-codex-airlift authorize --auth-file ~/.codex/auth.json
-codex-airlift bootstrap-daemon
-codex-airlift doctor
+./scripts/airlift open                  # interactive local/cloud chat picker
+./scripts/airlift chats                 # private ownership catalog as JSON
+./scripts/airlift chat cloud CHAT_UUID  # reopen one cloud chat
+./scripts/airlift chat local CHAT_UUID  # reopen returned work
 ```
 
-Startup package installation can take several minutes. Authorize only a trusted
-host with your own credential. Credential contents are streamed over SSH, never
-put in Terraform, command arguments, logs, or the repo; existing remote credentials
-are preserved. You can instead sign in on the host using normal Codex login.
+The vendor terminal UI provides history, prompts, tool execution and approval
+controls. A newly restored folder can require its normal trust confirmation
+when first opened. Disconnecting the terminal leaves cloud work executing in
+its independent systemd runtime. Reconnect through Airlift, rather than reusing
+the temporary socket address printed by the vendor UI.
 
-For a deliberate Codex upgrade, pass `--update-codex` with the new pinned version.
-This changes startup metadata in place and preserves the original compute lease.
-Apply while remote work is idle, then reboot the host to run the updated startup
-script. Verify `doctor` before handing off chats.
+Use `$codex-from-cloud` to return all or selected Airlift chats. Returned work
+opens in a fresh local Airlift runtime and checkout, preserving original chat
+and turn IDs. It does not overwrite your original repository or register chats
+in official Codex Desktop. Imported chats wait for your next instruction.
 
-Terraform uses its own state, network, SSH key, and service account. Only the IAP
-SSH source range can reach port 22. App-server has no public listener. The VM's
-service account has no project roles or OAuth scopes. Persistent code and chats
-remain on the protected 100 GB disk when compute stops.
-
-State defaults to `~/.local/state/codex-airlift` with owner-only permissions.
-For independent deployments, pass a different `--state-dir` to **every** command.
-A marked, concrete Host block is added to SSH config without replacing unrelated
-configuration, so the desktop app can discover the alias directly.
-
-Invoke `$codex-to-cloud` from the desktop app to register and verify the remote
-project, then transfer chats when the native integration is ready. Return with
-`$codex-from-cloud`. Open chats mean loaded active/idle/waiting Codex chats by
-default. Archived chats and unloaded history are preserved unless explicitly
-included. ChatGPT chats are outside the native handoff contract.
-
-For private repositories without cloud Git credentials:
+For scripting, freeze a private JSON array of chat UUIDs and choose a stable
+batch UUID. Reuse that exact UUID and selection after a failed connection:
 
 ```sh
-codex-airlift prepare-repo /path/to/project
+./scripts/airlift batch --to cloud --inventory /private/selected.json --batch BATCH_UUID
+./scripts/airlift batch --to local --inventory /private/selected.json --batch RETURN_UUID
 ```
 
-This sends committed Git objects through IAP/SSH and preserves existing working
-files. Native handoff subsequently transfers the selected chat's Git work. It
-doesn't push private source to this public repository.
+For initial Desktop adoption, first run `stage-desktop --inventory FILE --batch
+BATCH_UUID`, then archive through Codex's public archive tool, then run the batch
+with `--desktop` and the same UUID. The skill does this automatically. Desktop
+can remove managed checkouts during archive; the pre-archive capture preserves
+their original index and saved files, and is compared against the retained Git
+snapshot before use. The CLI refuses live
+Desktop sources. `--desktop-binary` selects the source app's bundled CLI when
+it is not at the default macOS location. It reads the source index only in
+read-only mode. The coordinating chat moves last, after a durable checkpoint;
+a queued finalizer is not reported as a completed transfer.
 
-For an existing deployment, prepare and register a project with one script:
+## What is preserved
 
-```sh
-./scripts/setup-project.sh /path/to/project
-# Optional: --state-dir /private/other-deployment
-```
+Each transfer retains an immutable, hash-checked bundle of canonical JSONL
+history and all referenced fork/segment prefixes. A self-contained execution
+copy keeps model records, encrypted reasoning, tool records and turn IDs in
+order; only session environment metadata and outer ordinals are adapted.
+No live SQLite database is copied. The destination reconstructs its own index
+using public `thread/resume`, and compares the complete paginated history
+fingerprint before granting ownership. The rollout-path import API is
+experimental; the tested transport pins Codex **0.167.1**. Do not assume another
+release has identical history or permission schemas.
 
-The script bootstraps its Python environment if needed, configures the SSH alias,
-checks the existing host and authentication, prepares committed Git objects,
-installs both skills, and registers the project using `project/list`,
-`project/create`, and `project/read`. The API comes from the version-specific
-schema generated by `codex app-server generate-json-schema --experimental`.
-Registration has a stable idempotency key, a private receipt, and readback checks;
-reruns adopt an existing matching project and preserve its human-chosen name.
-It does not provision more compute or renew the original lease.
+Git transport preserves committed HEAD, branch, staged and unstaged binary
+changes, nonignored untracked files and common saved-output directories
+(`artifacts`, `outputs`, `reports`). File hashes and modes are checked after
+restoration. Submodules, special files, custom sandbox policies and oversized
+packets fail closed for explicit reconciliation. Ignored dependencies, caches,
+account-specific plugins, macOS applications and environment credentials need
+their normal host setup; Airlift does not invent Linux equivalents.
 
-Server registration and desktop recognition are separate acceptance checks.
-The coordinating skill obtains a fresh native `list_projects` response and
-passes it to the verification command automatically:
+Source ownership is suspended before archive. A timeout never authorizes a
+second executor or a repeated model turn. Operation journals are atomic and
+locked; immutable packets can be resent, while uncertain imports retain their
+receipts for inspection. Original data is retained for recovery. Do not
+manually resume an archived source while its destination owns the chat.
 
-```sh
-codex-airlift register-project --remote-cwd /home/codex/projects/example
-codex-airlift project-status --remote-cwd /home/codex/projects/example \
-  --host-id REMOTE_HOST_ID --desktop-inventory /private/desktop-projects.json
-```
+## Infrastructure and compute allowance
 
-The native inventory must be less than 60 seconds old and contain exactly one
-Git project with the expected host and root. Server registration alone cannot
-mark setup ready. `setup-project` exits **3** with a private `status=incomplete`
-receipt when desktop readback is absent or incompatible. Supply
-`--desktop-inventory` and `--host-id` to check it in the setup invocation.
+Terraform creates one Ubuntu VM, dedicated VPC/subnet, IAP-only SSH firewall,
+and protected 100 GB persistent disk. The VM service account has no project
+roles or OAuth scopes. App-server Unix sockets are owner-only; there is no
+public application listener. Code and history survive compute shutdown.
 
-On the currently tested desktop build, creating the server project did not make
-it appear in the desktop project's list. Native handoff also rejected the
-fixture for pending composer state despite an empty server queue. These are
-unresolved integration gates; setup does not clear drafts, start replacement
-chats, or bypass them through private app storage or UI automation.
+The fixed shape is **one `e2-highmem-2` in `us-central1-a`** (2 vCPU, 16 GiB),
+with no scaling, GPU, replica or machine-size switches. Its on-demand price
+checked 2026-11-10 was $0.09039966/hour, approximately $67.26 per 31-day month.
+A conservative $0.125/hour allocation reserves **$93 per 31-day calendar month**,
+under the requested **$100/month compute allowance**.
 
-## Monthly compute limit
+GCP also enforces an absolute 90-day shutdown deadline. Reapply, reconnect and
+restart do not extend the original lease. GCP rejects starts after expiry until
+an explicitly authorized renewal; revalidate pricing before renewal.
 
-The deployment fixes **one `e2-highmem-2` (2 vCPU, 16 GiB) in `us-central1-a`**.
-Its published on-demand price checked on 2026-11-10 is $0.09039966/hour, or about
-$67.26 for a full 31-day month. Airlift reserves at a higher $0.125/hour ceiling:
-744 hours costs **$93**, leaving headroom under a $100 calendar-month compute
-allowance. Terraform exposes no machine-size, region, replica-count, GPU, or
-autoscaling switch that can silently defeat this capacity bound.
-
-Additionally, GCP enforces an absolute 90-day shutdown deadline. Reapplying or
-restarting doesn't extend it; after expiry, GCP rejects a start until the lease is
-explicitly renewed. Revalidate the published price before renewal. The source
-and private deployment record retain the original anchor.
-
-This is a **bounded compute allocation**, not a native billing-dollar cutoff.
-It relies on the pinned VM remaining below the conservative rate ceiling. GCP
-does not provide spend-cap enforcement for persistent VM compute. Disks, public
-IPv4, network traffic, model usage, taxes, and unrelated project services are
-outside this compute-only allowance and are billed separately. Disk retention
-continues after the VM stops. Do not describe a billing alert as a hard cutoff.
+This is a **bounded compute allocation, not a metered billing-dollar cutoff**.
+It relies on the pinned VM remaining below the reserved rate. GCP does not offer
+a persistent-VM billing spend cap. Disk, IPv4, network, model usage, taxes and
+unrelated project services are separate charges. Retained disks keep billing
+after compute stops. Billing alerts are not enforcement.
 
 Sources: [VM pricing](https://cloud.google.com/products/compute/pricing/general-purpose),
 [enforced VM time limits](https://docs.cloud.google.com/compute/docs/instances/limit-vm-runtime),
 [spend-cap scope](https://docs.cloud.google.com/billing/docs/how-to/budgets-spend-caps).
 
-## Recovery and verification
+## Verification and recovery
 
-Each row moves through `pending → claimed → submitted → verified` in a private
-atomic journal. A process failure after claim is uncertain, even without an
-operation receipt: inspect both hosts before resubmitting. A recorded operation
-must be reconciled by its original ID. Claiming another row is rejected while
-one is unresolved. Verification requires the exact chat ID on the destination;
-the skill also requires reopening its history and Git work. Failed rows are kept.
+Live acceptance has exercised a same-ID local→cloud→local chat round trip,
+inherited model context, rendered terminal history, a real shell command that
+finished after SSH disconnection, saved-output reopening, and exact staged/
+unstaged/untracked Git readback. A segmented history import was also compared
+against its full original turn fingerprint. Private receipts stay outside Git.
+These fixture checks do not imply every plugin or project tool is portable.
 
-Before real bulk migration, verify on a disposable chat: transfer out, perform
-work, disconnect the SSH client during execution, reconnect and reopen the saved
-result, then transfer back. Separately test a shortened GCP deadline on an empty
-host and restore the original deadline afterward. Keep private run IDs and
-receipts outside this repository. Do not interrupt a host holding human work for
-an infrastructure test.
+If adopting a checkout that Desktop already removed without a prior capture,
+recover its retained Git snapshot into a separate directory and pass
+`--workspace` (one move) or `--workspace-map` (batch). A Desktop snapshot folds
+uncommitted changes together; it cannot reconstruct the earlier staging split.
+Keep that recovery provenance explicit. `--reconcile-workspace` permits readback
+of an inspected failure only before any destination runtime exists; it never
+clears an uncertain execution or replaces a different packet.
 
-The opt-in probes perform those two infrastructure checks and retain receipts:
-
-```sh
-# Refuses to run when the host has any non-archived chats.
-codex-airlift probe stop
-# Runs one real Codex turn, disconnects during a 90-second command, then reopens it.
-codex-airlift probe disconnect --remote-cwd /home/codex/projects/disposable-test
-```
-
-The disconnect probe incurs model usage. An existing receipt blocks blind
-resubmission; inspect its recorded thread before attempting another test.
-Use `codex-airlift probe disconnect --reconcile` to reopen the recorded turn and
-saved file after a transport failure or server repair, without starting a turn.
-
-The repository's automated suite covers budget bounds, immutable lease replay,
-scope selection, uncertain submission, wrong-host rejection, and durable journal
-readback. These checks alone are not proof of a live desktop migration.
+`doctor` verifies the deployed VM shape, original deadline, authentication and
+pinned CLI/server versions. The opt-in `probe stop` tests GCP shutdown only on
+an empty host. Never run infrastructure interruption probes on human work.
+Inspect existing operation IDs and receipts before attempting recovery; do
+not clear a failed journal or generate new IDs to conceal uncertainty.
 
 ```sh
 PYTHONPATH=src python3 -m unittest discover -s tests -v
+bash -n scripts/setup-project.sh scripts/airlift
 terraform -chdir=infra/gcp fmt -check
-terraform -chdir=infra/gcp init -backend=false
+terraform -chdir=infra/gcp init -backend=false -input=false
 terraform -chdir=infra/gcp validate
 ```
 
-CI performs no deployment and receives no cloud credentials. The VM and disk are
-protected against accidental deletion; decommission only after chats and files
-are safely returned, then deliberately remove those protections in Terraform.
+CI performs no deployment and receives no cloud credentials. Decommission only
+after returning work, then deliberately remove the VM/disk deletion protections.
 
 ## License
 

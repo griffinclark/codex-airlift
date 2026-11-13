@@ -17,7 +17,7 @@ from .storage import locked, private_dir, read_json, write_json
 
 
 def run(argv, **kwargs):
-    return subprocess.run([str(a) for a in argv], check=True, timeout=kwargs.pop("timeout", 600), **kwargs)
+    return subprocess.run([str(a) for a in argv], check=kwargs.pop("check", True), timeout=kwargs.pop("timeout", 600), **kwargs)
 
 
 def capture(argv, **kwargs):
@@ -326,7 +326,11 @@ def install_skills(args):
         destination = target / name
         source = root / "skills" / name
         if destination.exists() and (destination / "SKILL.md").read_bytes() != (source / "SKILL.md").read_bytes():
-            raise ValueError(f"Existing skill differs: {destination}; preserving it")
+            if not getattr(args, "update", False):
+                raise ValueError(f"Existing skill differs: {destination}; use install-skills --update to back it up and replace it")
+            backup = private_dir(Path(args.state_dir).expanduser() / "skill-backups") / (name + "-" + str(time.time_ns()))
+            shutil.copytree(destination, backup)
+            shutil.copyfile(source / "SKILL.md", destination / "SKILL.md")
         if not destination.exists():
             shutil.copytree(source, destination)
         print(str(destination))
@@ -361,6 +365,36 @@ def probe(args):
         if not args.remote_cwd and not args.reconcile:
             raise ValueError("Provide a task-owned --remote-cwd for the disconnect probe")
         disconnect_probe(root, lease, args.remote_cwd, reconcile=args.reconcile)
+
+
+def airlift_setup(args):
+    from .client import install_client
+    root = private_dir(Path(args.state_dir).expanduser().resolve())
+    if not (root / "deployment.json").exists():
+        if not args.project or not args.apply:
+            raise ValueError("First setup requires --project PROJECT --apply to provision its reviewed compute allocation")
+        args.name = "codex-airlift"
+        args.update_codex = False
+        deploy(args)
+    configure_ssh(args)
+    deadline = time.monotonic() + 900
+    while True:
+        ready = ssh(args, "test -f /var/lib/codex-airlift-ready", capture_output=True, timeout=60, check=False)
+        if ready.returncode == 0:
+            break
+        if time.monotonic() >= deadline:
+            raise ValueError("Host bootstrap is incomplete; its logs and original compute lease were retained")
+        print("Waiting for the existing host bootstrap…", flush=True)
+        time.sleep(10)
+    authenticated = ssh(args, "test -f ~/.codex/auth.json", capture_output=True, timeout=60, check=False)
+    if authenticated.returncode:
+        authorize(args)
+    bootstrap_daemon(args)
+    doctor(args)
+    args.update = True
+    install_skills(args)
+    result = install_client(args.state_dir, source_root(args))
+    print(json.dumps(result, indent=2))
 
 
 def parser():
@@ -404,6 +438,7 @@ def parser():
     d.add_argument("--host-id")
     d.set_defaults(func=setup_project)
     d = commands.add_parser("install-skills")
+    d.add_argument("--update", action="store_true", help="Back up and replace existing Airlift skills")
     d.add_argument("--skills-dir", default=str(Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "skills"))
     d.set_defaults(func=install_skills)
     d = commands.add_parser("manifest", help="Plan and reconcile a batch of native app handoffs")
@@ -422,6 +457,57 @@ def parser():
     d.add_argument("--remote-cwd")
     d.add_argument("--reconcile", action="store_true", help="Read the recorded disconnect result without starting another turn")
     d.set_defaults(func=probe)
+    from .client import cli_command
+    d = commands.add_parser("client-setup", help="Install the independent Airlift terminal client and cloud worker")
+    d.set_defaults(func=cli_command)
+    d = commands.add_parser("setup", help="Set up the independent client without desktop Settings steps")
+    d.add_argument("path", nargs="?", default=".", help="Project context; Git work moves with each selected chat")
+    d.add_argument("--state-dir", default=argparse.SUPPRESS)
+    d.add_argument("--skills-dir", default=str(Path.home() / ".codex/skills"))
+    d.add_argument("--project")
+    d.add_argument("--apply", action="store_true")
+    d.add_argument("--monthly-budget", default="100")
+    d.add_argument("--codex-version", default="0.167.1")
+    d.add_argument("--auth-file", default=str(Path.home() / ".codex/auth.json"))
+    d.set_defaults(func=airlift_setup)
+    for name in ("chats", "open"):
+        commands.add_parser(name).set_defaults(func=cli_command)
+    d = commands.add_parser("chat", help="Open an Airlift chat in the official Codex terminal UI")
+    d.add_argument("host", choices=("local", "cloud"))
+    d.add_argument("thread")
+    d.set_defaults(func=cli_command)
+    d = commands.add_parser("move", help="Transfer a chat; reuse the same operation UUID after transport failures")
+    d.add_argument("--thread", required=True)
+    d.add_argument("--to", required=True, choices=("cloud", "local"))
+    d.add_argument("--operation", required=True)
+    d.add_argument("--desktop", action="store_true", help="Adopt an already archived official desktop chat")
+    d.add_argument("--workspace", help="Explicit recovered checkout for a removed Desktop worktree")
+    d.add_argument("--reconcile-workspace", action="store_true", help="Read back an inspected pre-runtime workspace failure without replacing it")
+    d.add_argument("--desktop-home", default=str(Path.home() / ".codex"))
+    d.add_argument("--desktop-binary", default="/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex")
+    d.set_defaults(func=cli_command)
+    d = commands.add_parser("batch", help="Move an explicit inventory, or all Airlift-owned chats")
+    d.add_argument("--to", required=True, choices=("cloud", "local"))
+    d.add_argument("--batch", required=True, help="Stable UUID; reuse it to reconcile this exact selection")
+    d.add_argument("--inventory")
+    d.add_argument("--desktop", action="store_true")
+    d.add_argument("--workspace-map", help="Private JSON map of chat IDs to explicitly recovered checkouts")
+    d.add_argument("--reconcile-workspace", action="store_true")
+    d.add_argument("--desktop-home", default=str(Path.home() / ".codex"))
+    d.add_argument("--desktop-binary", default="/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex")
+    d.set_defaults(func=cli_command)
+    d = commands.add_parser("stage-desktop", help="Capture Git work before Desktop archive can remove managed checkouts")
+    d.add_argument("--inventory", required=True)
+    d.add_argument("--batch", required=True)
+    d.add_argument("--desktop-home", default=str(Path.home() / ".codex"))
+    d.set_defaults(func=cli_command)
+    d = commands.add_parser("finalize-desktop", help="Wait for a coordinating chat's public archive, then move and verify it")
+    d.add_argument("--thread", required=True)
+    d.add_argument("--operation", required=True)
+    d.add_argument("--timeout", type=int, default=600)
+    d.add_argument("--desktop-home", default=str(Path.home() / ".codex"))
+    d.add_argument("--desktop-binary", default="/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex")
+    d.set_defaults(func=cli_command)
     return p
 
 
