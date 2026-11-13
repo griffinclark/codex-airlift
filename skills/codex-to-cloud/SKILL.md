@@ -14,10 +14,18 @@ live session databases, or assume two hosts share credentials and local tools.
    project, $100-or-lower monthly allowance, and unexpired price-validation lease.
    Do not reset the lease or increase the budget during a transfer.
 2. Use `list_projects` and `list_threads` to identify the registered SSH host ID.
-   If it is missing, enable the named SSH host in Settings > Connections and save
-   matching projects. `codex-airlift configure-ssh` makes its alias discoverable.
+   `codex-airlift configure-ssh` makes its alias discoverable. If the desktop has
+   no connected host, record that integration gate instead of claiming readiness.
    Prepare each repository with `codex-airlift prepare-repo /path/to/repository`.
-   Save the same repository subdirectory on both hosts. Establish required tools,
+   Register the matching remote subdirectory automatically with
+   `codex-airlift register-project --remote-cwd /home/codex/projects/REPOSITORY`.
+   Save a fresh native `list_projects` response privately, then run
+   `codex-airlift project-status --remote-cwd ... --host-id HOST_ID --desktop-inventory /private/projects.json`.
+   Readback must be less than 60 seconds old. Server registration alone does not
+   establish a native handoff destination. If desktop recognition is absent,
+   preserve the receipts and report the blocked acceptance gate; do not replace
+   it with manual setup directions or bypass private app storage/UI restrictions.
+   Establish required tools,
    credentials, files, trusted hooks, and browser capabilities before moving work
    that depends on them; record concrete incompatibilities.
 3. Freeze a private, complete inventory of the requested chats. Default "open"

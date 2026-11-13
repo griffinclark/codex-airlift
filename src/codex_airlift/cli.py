@@ -9,9 +9,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 from .budget import make_lease, parse_time, validate_existing
-from . import manifest
+from . import manifest, projects
 from .storage import locked, private_dir, read_json, write_json
 
 
@@ -219,6 +220,102 @@ fi
 printf '%s\\n' "$target"
 """
         ssh(args, "bash -s -- " + shlex.join([name, origin, remote_bundle]), input=script, text=True, timeout=600)
+    return "/home/codex/projects/" + name
+
+
+def register_project(args):
+    from .probes import remote_rpc
+    root, lease = deployment(args)
+    validate_existing(lease, lease)
+    key = projects.project_key(lease, args.remote_cwd)
+    journal = root / "projects" / (key + ".json")
+    # The public project API also accepts nonexistent roots. Verify the actual
+    # repository before registering it, without changing trust or permissions.
+    checked = ssh(args, "git -C " + shlex.quote(args.remote_cwd) + " rev-parse --is-inside-work-tree",
+                  capture_output=True, text=True, timeout=90)
+    if checked.stdout.strip() != "true":
+        raise ValueError("Remote project root is not inside a Git repository")
+    with remote_rpc(root, lease) as client:
+        record = projects.register_project(client, journal, lease, args.remote_cwd,
+                                           args.label or Path(args.remote_cwd).name)
+    print(json.dumps(record, indent=2))
+    return record
+
+
+def desktop_project_status(args):
+    from .probes import remote_rpc
+    root, lease = deployment(args)
+    validate_existing(lease, lease)
+    key = projects.project_key(lease, args.remote_cwd)
+    journal = root / "projects" / (key + ".json")
+    inventory = Path(args.desktop_inventory).expanduser()
+    with locked(journal):
+        record = read_json(journal)
+        record["desktop_status"] = "unverified"
+        record.pop("desktop_verified_at", None)
+        record.pop("desktop_project_id", None)
+        write_json(journal, record)
+        age = time.time() - inventory.stat().st_mtime
+        if not -5 <= age <= 60:
+            raise ValueError("Refresh the native list_projects inventory; readback is older than 60 seconds")
+        verified = projects.verify_desktop_project(record, read_json(inventory), args.host_id)
+        with remote_rpc(root, lease) as client:
+            projects.readback_project(client, record["project_id"], args.remote_cwd)
+        verified["desktop_verified_at"] = time.time()
+        write_json(journal, verified)
+    print(json.dumps(verified, indent=2))
+    return verified
+
+
+def setup_project(args):
+    local = Path(args.path).expanduser().resolve()
+    top = Path(capture(["git", "-C", local, "rev-parse", "--show-toplevel"])).resolve()
+    relative = local.relative_to(top)
+    # Validate the intended registration before any configuration change.
+    root, lease = deployment(args)
+    args.folder = args.folder or top.name
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}", args.folder) or args.folder in (".", ".."):
+        raise ValueError("Invalid destination repository folder")
+    remote_top = "/home/codex/projects/" + args.folder
+    args.remote_cwd = remote_top + ("/" + relative.as_posix() if relative.parts else "")
+    key = projects.project_key(lease, args.remote_cwd)
+    args.label = args.label or local.name
+    receipt = root / ("setup-" + key + ".json")
+    with locked(receipt):
+        return _setup_project_steps(args, receipt)
+
+
+def _setup_project_steps(args, receipt):
+    status = {"schema": 1, "remote_path": args.remote_cwd,
+              "status": "incomplete", "reason": "Setup is running",
+              "server_registered": False, "desktop_registered": False,
+              "chats_moved": 0, "attempt_started_at": time.time()}
+    write_json(receipt, status)
+    try:
+        configure_ssh(args)
+        doctor(args)
+        prepare_repo(args)
+        install_skills(args)
+        record = register_project(args)
+    except Exception as error:
+        status["reason"] = str(error)
+        write_json(receipt, status)
+        raise
+    status.update(server_registered=True, project_id=record["project_id"])
+    if args.desktop_inventory:
+        try:
+            desktop_project_status(args)
+        except (ValueError, OSError, EOFError, KeyError, subprocess.SubprocessError) as error:
+            status["reason"] = str(error)
+        else:
+            status.update(status="ready", desktop_registered=True)
+            status.pop("reason", None)
+    else:
+        status["reason"] = "Native desktop project readback is required; server registration alone is insufficient"
+    write_json(receipt, status)
+    print(json.dumps(status, indent=2))
+    if status["status"] != "ready":
+        raise SystemExit(3)
 
 
 def install_skills(args):
@@ -288,6 +385,24 @@ def parser():
     d.add_argument("path")
     d.add_argument("--folder")
     d.set_defaults(func=prepare_repo)
+    d = commands.add_parser("register-project", help="Idempotently register a remote project through the public Codex app-server API")
+    d.add_argument("--remote-cwd", required=True)
+    d.add_argument("--label")
+    d.set_defaults(func=register_project)
+    d = commands.add_parser("project-status", help="Verify that native desktop project readback recognizes the registered remote root")
+    d.add_argument("--remote-cwd", required=True)
+    d.add_argument("--desktop-inventory", required=True)
+    d.add_argument("--host-id", required=True)
+    d.set_defaults(func=desktop_project_status)
+    d = commands.add_parser("setup-project", help="Prepare and register a project; exit 3 unless the desktop recognizes it")
+    d.add_argument("path")
+    d.add_argument("--state-dir", default=argparse.SUPPRESS)
+    d.add_argument("--folder")
+    d.add_argument("--label")
+    d.add_argument("--skills-dir", default=str(Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "skills"))
+    d.add_argument("--desktop-inventory")
+    d.add_argument("--host-id")
+    d.set_defaults(func=setup_project)
     d = commands.add_parser("install-skills")
     d.add_argument("--skills-dir", default=str(Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "skills"))
     d.set_defaults(func=install_skills)
