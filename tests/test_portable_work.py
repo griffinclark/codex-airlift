@@ -15,7 +15,7 @@ from codex_airlift.git_snapshot import snapshot, restore, state
 from codex_airlift.packet import pack, unpack, verify_contents
 from codex_airlift.runtime import RuntimeStore, terminal_arguments
 from codex_airlift.storage import private_dir, write_json
-from codex_airlift.transfer import receive, settings_from_row
+from codex_airlift.transfer import receive, settings_from_row, resume_parameters, verify_settings
 from codex_airlift.desktop_stage import verify_archived_workspace
 from codex_airlift.client import cli_command
 
@@ -136,6 +136,21 @@ class PortableWorkTest(unittest.TestCase):
         self.assertEqual(command[:7], ["/vendor/codex", "resume", "thread", "--remote", "unix:///private/host.sock", "--cd", "/remote/work space"])
         self.assertNotIn("--ask-for-approval", command)
         self.assertNotIn("--sandbox", command)
+
+    def test_reasoning_effort_is_a_config_override_and_effective_settings_are_checked(self):
+        settings = {"model": "model-name", "reasoningEffort": "xhigh", "approvalPolicy": "never", "sandbox": "danger-full-access"}
+        params = resume_parameters("thread", "/work", settings)
+        self.assertEqual(params["config"], {"model_reasoning_effort": "xhigh"})
+        self.assertNotIn("reasoningEffort", params)
+        response = {"model": "model-name", "reasoningEffort": None, "approvalPolicy": "never", "sandbox": {"type": "dangerFullAccess"}}
+        with self.assertRaisesRegex(ValueError, "settings differ"):
+            verify_settings(response, settings)
+        response["reasoningEffort"] = "xhigh"
+        self.assertEqual(verify_settings(response, settings), settings)
+        store = RuntimeStore(self.root / "runtime", "/bin/false", self.root / "auth")
+        store.configure("11111111-1111-4111-8111-111111111111", settings)
+        config = (Path(store.info("11111111-1111-4111-8111-111111111111")["home"]) / "config.toml").read_text()
+        self.assertIn('model_reasoning_effort = "xhigh"', config)
 
     def test_unknown_source_policy_cannot_become_unrestricted(self):
         row = {"sandbox_policy": json.dumps({"type": "unknown"}), "approval_mode": "never", "model": None, "reasoning_effort": None}

@@ -37,6 +37,33 @@ def settings_from_row(row):
             "sandbox": mode, "approvalPolicy": approval}
 
 
+def settings_from_response(value):
+    policy = value["sandbox"]
+    modes = {"dangerFullAccess": "danger-full-access", "readOnly": "read-only", "workspaceWrite": "workspace-write"}
+    mode = modes.get(policy["type"])
+    if not mode or policy.get("networkAccess") or policy.get("writableRoots") or policy.get("excludeSlashTmp") or policy.get("excludeTmpdirEnvVar"):
+        raise ValueError("Current sandbox settings need explicit portable reconciliation")
+    return {"model": value["model"], "reasoningEffort": value.get("reasoningEffort"),
+            "sandbox": mode, "approvalPolicy": value["approvalPolicy"]}
+
+
+def resume_parameters(thread_id, cwd, settings, path=None):
+    value = {"threadId": thread_id, "cwd": str(cwd), "excludeTurns": True}
+    value.update({key: settings[key] for key in ("model", "sandbox", "approvalPolicy") if settings.get(key) is not None})
+    if settings.get("reasoningEffort") is not None:
+        value["config"] = {"model_reasoning_effort": settings["reasoningEffort"]}
+    if path is not None:
+        value["path"] = str(path)
+    return value
+
+
+def verify_settings(effective, expected):
+    actual = settings_from_response(effective)
+    if any(actual[key] != value for key, value in expected.items() if value is not None):
+        raise ValueError("Effective model, reasoning or permission settings differ from the source")
+    return actual
+
+
 def desktop_row(home, thread_id):
     identifier(thread_id)
     with sqlite3.connect((Path(home) / "state_5.sqlite").as_uri() + "?mode=ro", uri=True) as db:
@@ -139,6 +166,9 @@ def export_runtime(store, op_id, thread_id):
                 store.record(thread_id, record)
                 raise ValueError("Queued input needs a human decision before transfer")
             if not already_archived:
+                effective = client.request("thread/resume", {"threadId": thread_id, "excludeTurns": True})
+                record["settings"] = settings_from_response(effective)
+                store.record(thread_id, dict(record, state="suspended", outgoing_operation=op_id))
                 client.request("thread/archive", {"threadId": thread_id})
             info = client.request("thread/read", {"threadId": thread_id})["thread"]
             turns = read_turns(client, thread_id)
@@ -191,13 +221,14 @@ def receive(store, op_id, packet, sha256, reconcile_workspace=False):
         runtime_id = op_id
         history_path, _ = import_portable(payload / "history", store.info(runtime_id)["home"],
                                          cwd=cwd, workspace_root=folder / "workspace")
+        store.configure(runtime_id, metadata["settings"])
         store.ensure(runtime_id)
         with store.rpc(runtime_id) as client:
-            params = {"threadId": thread_id, "path": str(history_path), "cwd": str(cwd),
-                      "excludeTurns": True, **{key: value for key, value in metadata["settings"].items() if value is not None}}
+            params = resume_parameters(thread_id, cwd, metadata["settings"], history_path)
             resumed = client.request("thread/resume", params)
             if resumed["thread"]["id"] != thread_id:
                 raise ValueError("Destination chat identity differs")
+            verify_settings(resumed, metadata["settings"])
             client.request("thread/name/set", {"threadId": thread_id, "name": metadata["title"]})
             turns = read_turns(client, thread_id)
             if history_fingerprint(turns) != metadata["history_fingerprint"]:

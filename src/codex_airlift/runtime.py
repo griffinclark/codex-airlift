@@ -1,9 +1,11 @@
 """Task-owned app-server runtimes and Unix-socket terminal clients."""
 import os
+import json
 from pathlib import Path
 import subprocess
 import time
 import uuid
+import tempfile
 
 from .rpc import RpcClient
 from .storage import locked, private_dir, read_json, write_json
@@ -37,6 +39,25 @@ class RuntimeStore:
         env = dict(os.environ, CODEX_HOME=info["home"])
         return RpcClient([self.binary, "app-server", "proxy", "--sock", info["socket"]],
                          websocket=True, env=env)
+
+    def configure(self, runtime_id, settings):
+        """Persist this isolated chat's existing settings for host restarts."""
+        home = private_dir(self.info(runtime_id)["home"])
+        keys = {"approvalPolicy": "approval_policy", "sandbox": "sandbox_mode",
+                "model": "model", "reasoningEffort": "model_reasoning_effort"}
+        lines = [key + " = " + json.dumps(settings[source]) for source, key in keys.items()
+                 if settings.get(source) is not None]
+        lines += ["[analytics]", "enabled = false", ""]
+        fd, temporary = tempfile.mkstemp(prefix=".config-", dir=home)
+        try:
+            with os.fdopen(fd, "w") as stream:
+                stream.write("\n".join(lines))
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, home / "config.toml")
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
 
     def ensure(self, runtime_id):
         info = self.info(runtime_id)
